@@ -24,6 +24,8 @@ Device (MCHC)
 		MEBA,	 64,
 		Offset (0xa0),	// Top of Used Memory
 		TOM,	 64,
+		Offset (0xa8),  // Top of Upper Usable DRAM
+		TOUU,    64,
 		Offset (0xbc),	// Top of Low Used Memory
 		TLUD,	 32,
 	}
@@ -136,18 +138,21 @@ Name (MCRS, ResourceTemplate()
 			Cacheable, ReadWrite,
 			0x00000000, 0x00000000, 0x00000000, 0x00000000,
 			0x00000000,,, PM01)
-#if CONFIG(SOC_INTEL_BROADWELL)
 	// PCI Memory Region above MMCONF (dynamic, based on ECAM size)
 	DWordMemory (ResourceProducer, PosDecode, MinFixed, MaxFixed,
 			Cacheable, ReadWrite,
 			0x00000000, 0x00000000, 0x00000000, 0x00000000,
 			0x00000000,,, PM02)
-#endif
 	// TPM Area (0xfed40000-0xfed44fff)
 	DWordMemory (ResourceProducer, PosDecode, MinFixed, MaxFixed,
 			Cacheable, ReadWrite,
 			0x00000000, 0xfed40000, 0xfed44fff, 0x00000000,
 			0x00005000,,, TPMR)
+	// PCI Memory Region above 4G TOUUD -> 1 << 39 (Haswell CPU address bits)
+	QWordMemory (ResourceProducer, PosDecode, MinFixed, MaxFixed,
+			Cacheable, ReadWrite,
+			0x00000000, 0x00000000, 0x00000000, 0x00000000,
+			0x00000000,,, PM03)
 })
 
 Method (_CRS, 0, Serialized)
@@ -176,7 +181,6 @@ Method (_CRS, 0, Serialized)
 	PMAX = CONFIG_ECAM_MMCONF_BASE_ADDRESS - 1
 	PLEN = (PMAX - PMIN) + 1
 
-#if CONFIG(SOC_INTEL_BROADWELL)
 	// Set up PM02 region (MMCONF end to 0xFEBFFFFF)
 	CreateDwordField (MCRS, ^PM02._MIN, PM2B)
 	CreateDwordField (MCRS, ^PM02._MAX, PM2M)
@@ -205,7 +209,24 @@ Method (_CRS, 0, Serialized)
 		PM2M = 0xFEBFFFFF  // Just before chipset reserved (IOAPIC at 0xFEC00000)
 		PM2L = PM2M - PM2B + 1
 	}
-#endif
+	// Set up PM03 region for above-4G PCI space
+	CreateQwordField(MCRS, ^PM03._MIN, MMIN)
+	CreateQwordField(MCRS, ^PM03._MAX, MMAX)
+	CreateQwordField(MCRS, ^PM03._LEN, MLEN)
+
+	// Read TOUUD (Top of Upper Usable DRAM) from MCH register
+	Local0 = ^MCHC.TOUU & (0x7ffffff << 20)
+	// Calculate length: 1 << 39 (512GB) - TOUUD
+	Local1 = 0x8000000000 - Local0  // 0x8000000000 = 1 << 39
+
+	If (Local1 > 0) {
+		MMIN = Local0
+		MLEN = Local1
+		MMAX = MMIN + MLEN - 1
+	} Else {
+		// No space above 4G
+		MLEN = 0
+	}
 	Return (MCRS)
 }
 
